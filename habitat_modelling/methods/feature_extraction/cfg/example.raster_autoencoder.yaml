@@ -1,0 +1,28 @@
+model:  # Parameters to define the model
+  type: "bathymetry_autoencoder"  # The type of model
+  filters: [512, 512]  # Filters in each convolutional layer
+  neurons: [512, 512]  # Neurons in each dense layer
+  block_type: "plain"  # the type of blocks
+  latent_dim: 32  # Number of latent dimensions
+  input_shape: [21,21,1]  # Input shape
+  warm_encoder_weights: null  # Optional path to the encoder weights
+  warm_generator_weights: null  # Optional path the generator weigts
+rasters:  # Dictionary containing each raster
+  bathymetry:  # A bathymetry entry
+    path: "/path/to/bathymetry.tif"  # A path to the model
+    size: [21, 21]  # Size of each raster patch
+    boundary: null  # Optional boundary to restrict sampling area
+    transform: tensor  # Define the transform to perform on the raster
+training:  # the parameters for training
+  optimizer: "adam"  # The optimizer
+  lr: 0.0001
+  epochs: 100
+  batch_size: 8
+  samples_per_epoch: 1000  # How many times to sample the raster each epoch
+  save_model_freq: 1  # How often to save the model
+  focus_training: false  # Whether to use focus training ( hard negative mining )
+  focus_percentile: 10.0  # The top x percent of samples to use when focus ( hard negative mining ) training
+  schedule:  # The learning rate schedule is
+    type: "step"  # The schedule steps
+    gamma: 0.5  # The rate at which to decrease the learning rate
+    step_size: 10  # How much to decrease the step size by

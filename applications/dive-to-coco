@@ -1,0 +1,607 @@
+#!/usr/bin/python3
+
+import argparse
+from pycocotools.coco import COCO
+import numpy as np
+import os
+import glob
+from PIL import Image
+import logging
+import json
+import csv
+import utm
+
+
+import habitat_modelling.utils.renavutils3 as rutil
+from habitat_modelling.utils.raster_utils import extract_raster_patch, retrieve_pixel_coords, extract_geotransform
+
+def get_args():
+    parser = argparse.ArgumentParser(description="Creates a coco json from an ACFR Marine Dive")
+    parser.add_argument('dive_path', help="Path to the acfr_marine dive processed directory")
+    parser.add_argument('output_coco', help="Output path for the coco json")
+    parser.add_argument('--colour-mono', type=str, default='C', help="Whether to use color or mono images, Options: {C,M}, default == C")
+    parser.add_argument('--img-size', type=str, help="The image height for this dive. If this isn't specified, it will load the image and get its height. Enter as 'x' separated, e.g. 640x480")
+    parser.add_argument('--renav-subdir', type=str, help="The renav subdirectory within the dive - it is common for there to be multiple, so this argument allows the user to select one. If not provided, program will guess.")
+    parser.add_argument('--renav-pose-file', type=str, help="Path to the stereo_pose_est.data or vehicle_pose_est.data file which contains stereo poses")
+    parser.add_argument('--trip', type=str, help="The trip this dive was on")
+    parser.add_argument('--year', type=str, help="The year this dive was conducted")
+    parser.add_argument('--mesh', action="store_true", help="[mesh] If true, for each image, the corresponding mesh (.ply file) is found and added to the image dict")
+    parser.add_argument('--raster', type=str, help="[raster] List of rasters to be added to the dataset. These names are the names that will be added to the dataset. E.g. bathy,backscatter")
+    parser.add_argument('--raster-tiffs', type=str, help="[raster] List of paths to the geotiff files that correspond to the raster. Comma seperated. E.g. /path/to/tiffs/bathymetry.tiff,/path/to/tiffs/backscatter.tiff")
+    parser.add_argument('--extract-raster-patches', action="store_true", help="[raster] Extract a raster patch centred around each image. ")
+    parser.add_argument('--raster-patch-size', type=str, default="21x21", help="[raster] List of shapes (in pixels) of raster patches to be extracted. Corresponds to the raster list in '--raster'. Format is \"widthxheight\", e.g. \"21x21,21x21\" ")
+    parser.add_argument('--raster-patch-dir', type=str, default="patches", help="[raster] Folder to extract the raster patches to. Full path becomes, raster_patch_dir/raster/, e.g. /path/to/raster-patch-dir/bathy/, /path/to/raster-patch-dir/backscatter/")
+    parser.add_argument('--raster-projection-params', type=str, default='+proj=utm +zone=55G, +south +ellps=WGS84', help="Projection parameters")
+    parser.add_argument('--cluster-file', type=str, help="The image label file generated from the clustering process. Usually called image_labels.data, in the renav directory")
+    args = parser.parse_args()
+    return args
+
+
+def get_images_subdirectory(dive_path):
+    """
+    Get the subdirectory that contains all the images
+
+    Args:
+        dive_path: the processed dive directory
+
+    Returns:
+        str: the folder name for the image subdirectory
+
+    """
+    file_list = glob.glob(dive_path + "/*", recursive=False)
+    for f in glob.glob(dive_path + "/*", recursive=False):
+        bn = os.path.basename(f)
+        if bn.startswith('i') and bn.endswith('_cv'):
+            return bn
+
+    # If it gets to here, theres an error
+
+
+def get_renav_subdirectory(dive_path):
+    """
+    Get the subdirectory that contains all the images
+
+    Args:
+        dive_path: the processed dive directory
+
+    Returns:
+        str: the folder name for the image subdirectory
+
+    """
+    for f in glob.glob(dive_path + "/*", recursive=False):
+        bn = os.path.basename(f)
+        if bn.startswith('renav'):
+            return bn
+    # TODO what to do when there are multiple renav directories???
+
+
+def get_image_list(dive_path, image_subdir, colour_or_mono, width=None, height=None):
+    """
+    Retrieve a list of all images in the dive
+
+    Args:
+        dive_path: the path to the dive directory
+        image_subdir: the subdirectory which contains all the images e.g. i20190317_1235_cv
+        colour_or_mono: 'C' or 'M' representing colour images or mono
+        width: the width of all images
+        height: the height of all images
+
+    Returns:
+        list: A list of all the dictionary image elements, according to coco standard
+
+    """
+    if colour_or_mono == "C" or colour_or_mono == "M":
+        print("Using colour images")
+    else:
+        raise ValueError("--colour-mono needs to be either C or M")
+
+    id_count = 0
+
+    image_list = []
+
+    for f in glob.glob(os.path.join(dive_path, image_subdir + "/*"), recursive=False):
+        if not os.path.isfile(f):
+            continue
+        # Check if using color or mono
+        base = os.path.basename(f)
+        c_or_m = os.path.splitext(base)[0][-3]
+
+        if width is None or height is None:
+            try:
+                width, height = Image.open(f).size
+            except IOError:
+                logging.warning(
+                    "could not get image size from [{}]; no image width/height will be in coco".format(f))
+                width = height = None
+
+        if height is None or width is None:  # Width, height not found
+            width = height = -1
+
+        if c_or_m == colour_or_mono:
+            image = {
+                "id": id_count,
+                "file_name": os.path.basename(f),
+                "path": f,
+                "width": width,
+                "height": height
+
+            }
+            id_count += 1
+            image_list.append(image)
+
+    return image_list
+
+
+def add_mesh_to_images(image_list, dive_path, renav_subdir, mesh_agg_subdir='mesh/tmp/mesh-agg/', mesh_prefix='surface-', mesh_ext='.tc.ply', remove_images_without_mesh=False):
+    """
+    Adds the mesh entries to the image dictionaries
+
+    Args:
+        image_list: the list of image dictionary elements, according to coco standard
+        dive_path: the path of the dive directory
+        renav_subdir: the renav subdirectory name
+        mesh_diced_subdir: the location of mesh-diced. not always mesh/tmp/mesh-diced
+        remove_images_without_mesh: If true, images without a corresponding mesh will be removed
+
+    Returns:
+
+    """
+    updated_image_list = []
+    mesh_agg_dir = os.path.join(dive_path, renav_subdir, mesh_agg_subdir)
+    for image in image_list:
+        mesh_found = False
+        mesh_fname = mesh_prefix + image['file_name'].replace(".png", mesh_ext)
+        mesh_path = os.path.join(mesh_agg_dir, mesh_fname)
+        if os.path.exists(mesh_path):
+            mesh_dict = {}
+            mesh_dict['file_name'] = mesh_fname
+            mesh_dict['path'] = mesh_path
+            image['mesh'] = mesh_dict
+            mesh_found = True
+        # Add the images to the updated image list
+        if mesh_found or not remove_images_without_mesh:
+            updated_image_list.append(image)
+
+    return updated_image_list
+
+
+class StereoPoseData:
+    def __init__(self, pose_id, ts, lat, lon, x_north, y_east, z_depth, euler_x, euler_y, euler_z,
+                 left_image_name, right_image_name, vehicle_altitude, bounding_image_radius=0.0, cross_over_point=False):
+        self.pose_id = pose_id
+        self.ts = ts
+        self.lat = lat
+        self.lon = lon
+        self.x_north = x_north
+        self.y_east = y_east
+        self.z_depth = z_depth
+        self.euler_x = euler_x
+        self.euler_y = euler_y
+        self.euler_z = euler_z
+        self.left_image_name = left_image_name
+        self.right_image_name = right_image_name
+        self.vehicle_altitude = vehicle_altitude
+        self.bounding_image_radius = bounding_image_radius
+        self.cross_over_point = cross_over_point
+
+class Datum:
+    def __init__(self, lat, lon, alt=0.):
+        self.lat = float(lat)
+        self.lon = float(lon)
+        self.alt = float(alt)
+
+def extract_stereo_poses(stereo_pose_file):
+    """
+    Extracts the stereo poses
+    Args:
+        stereo_pose_file: The stereo pose file, called stereo_pose_est.data in the renav directory
+
+    Returns:
+        list: pose_list, a list of all the stereo poses
+        Datum: The datum
+
+    """
+    latitude = None
+    longitude = None
+
+    pose_list = []
+
+    with open(stereo_pose_file, 'r') as data_file:
+        # data_reader = csv.reader(data_file, delimiter='\t')
+        data_reader = csv.reader(data_file, delimiter='\t')
+        for row in data_reader:
+            if row:
+                if row[0][0] == '%':
+                    continue
+                elif row[0][0] == 'O':
+                    if 'ORIGIN_LATITUDE' in row[0]:
+                        latitude = row[0].split(' ')[-1]
+                    elif 'ORIGIN_LONGITUDE' in row[0]:
+                        longitude = row[0].split(' ')[-1]
+                    continue
+                # Try to handle spaces/tabs mixing
+                if len(row) == 0:
+                    row = [r for r in row.split(' ') if r != '']
+                spd = StereoPoseData(
+                    pose_id=int(row[0]),
+                    ts=float(row[1]),
+                    lat=float(row[2]),
+                    lon=float(row[3]),
+                    x_north=float(row[4]),
+                    y_east=float(row[5]),
+                    z_depth=float(row[6]),
+                    euler_x=float(row[7]),
+                    euler_y=float(row[8]),
+                    euler_z=float(row[9]),
+                    left_image_name=str(row[10]),
+                    right_image_name=str(row[11]),
+                    vehicle_altitude=float(row[12])
+                )
+                pose_list.append(spd)
+    if latitude and longitude:
+        datum = Datum(latitude, longitude)
+    else:
+        datum = None
+    return pose_list, datum
+
+
+def add_pose_to_images(image_list, stereo_pose_list, color_or_mono):
+    """
+    Add the poses to the images # TODO this isn't working yet.
+    Args:
+        image_list: the coco format list of image dictionaries
+        stereo_pose_list: the stereo pose list
+        color_or_mono: whether to use colour or mono
+
+    Returns:
+
+    """
+    # Find out whether to use the left or the right image
+    p0 = stereo_pose_list[0]
+    r0img = p0.right_image_name
+    l0img = p0.left_image_name
+    r_cm = os.path.splitext(r0img)[0][-3]
+    l_cm = os.path.splitext(l0img)[0][-3]
+
+    if r_cm == color_or_mono:
+        # use the right image
+        use_image_lr = 'right'
+    elif l_cm == color_or_mono:
+        use_image_lr = 'left'
+    else:
+        raise ValueError("Not using either the left or right image")
+
+    # Create a dictionary lookup between file_name, stereo_pose
+    stereo_pose_lookup = {}
+    for stp in stereo_pose_list:
+        if use_image_lr == 'right':
+            stereo_pose_lookup[os.path.splitext(stp.right_image_name)[0]] = stp
+        else:
+            stereo_pose_lookup[os.path.splitext(stp.left_image_name)[0]] = stp
+
+    # Iterate through the image list, assigning new images
+    updated_image_list = []
+    for image in image_list:
+        img_fname = image['file_name']
+        if os.path.splitext(img_fname)[0] in stereo_pose_lookup.keys():
+            stp = stereo_pose_lookup[os.path.splitext(img_fname)[0]]
+            position = [stp.x_north, stp.y_east, stp.z_depth]
+            orientation = [stp.euler_x, stp.euler_y, stp.euler_z]
+            pose = {
+                "position": position,
+                "orientation": orientation,
+                "altitude": stp.vehicle_altitude
+            }
+            image['pose'] = pose
+            image['geo_location'] = [stp.lat, stp.lon, -stp.z_depth]
+        updated_image_list.append(image)
+
+    return updated_image_list
+
+
+def renav_to_pose_list(image_list, renav, color_or_mono):
+    # Find out whether to use the left or the right image
+    p0 = renav[0]
+    r0img = p0['rightim']
+    l0img = p0['leftim']
+    r_cm = os.path.splitext(r0img)[0][-3]
+    l_cm = os.path.splitext(l0img)[0][-3]
+
+    if r_cm == color_or_mono:
+        # use the right image
+        use_image_lr = 'right'
+    elif l_cm == color_or_mono:
+        use_image_lr = 'left'
+    else:
+        raise ValueError("Not using either the left or right image")
+
+    # Create a dictionary lookup between file_name, stereo_pose
+    image_pose_lookup = {}
+    for rn in renav:
+        if use_image_lr == 'right':
+            image_pose_lookup[rn['rightim']] = rn
+        else:
+            image_pose_lookup[rn['leftim']] = rn
+
+    # Iterate through the image list, assigning new images
+    updated_image_list = []
+    for image in image_list:
+        img_fname = image['file_name']
+        if img_fname in image_pose_lookup.keys():
+            rn = image_pose_lookup[img_fname]
+            position = [rn['Xpos'], rn['Ypos'], rn['Zpos']]
+            orientation = [rn['Xang'], rn['Yang'], rn['Zang']]
+            pose = {
+                "position": position,
+                "orientation": orientation,
+                "altitude": rn['altitude']
+            }
+            image['pose'] = pose
+            image['geo_location'] = [rn['lat'], rn['lon'], -rn['Zpos']]
+        updated_image_list.append(image)
+
+
+def create_info(dive, trip=None, year=None, datum=None):
+    info = {}
+    info['dive'] = dive
+    if trip:
+        info['trip'] = trip
+    if year:
+        info['year'] = year
+    if datum:
+        info['datum_latitude'] = datum.lat
+        info['datum_longitude'] = datum.lon
+        info['datum_altitude'] = datum.alt
+    return info
+
+
+def extract_raster_patches_for_images(image_list, raster_name, raster_ds, geotransform, raster_info, patch_size, projection_params, patch_output_dir):
+    """
+    Extracts a raster patch centred around the image, and saves it to the output directory
+    Args:
+        image_list: (list) a coco format list of images. Needs to have geo_location in each dict
+        raster_name: (str) The name of the raster to be entered. E.g. 'bathy'
+        raster_ds: the raster ds, as delivered from gdal
+        geotransform: the geotransform
+        raster_info: (str) the information about the raster - used to decide what projections to use.
+        patch_size: the size of the patch to extract
+        patch_output_dir: the output directory to save the patches to
+
+    Returns:
+
+    """
+    if not os.path.exists(patch_output_dir):
+        os.makedirs(patch_output_dir)
+
+    half_patch = np.floor(patch_size[0] / 2)
+
+    updated_image_list = []
+
+
+    for image in image_list:
+        if 'geo_location' in image:
+            lla = image['geo_location']
+
+            if 'UTM' in raster_info['projection']:  # TODO find less hacky way to determine
+                use_utm = True
+            else:
+                use_utm = False
+
+            if use_utm:
+                ux, uy, zone_num, zone_letter = utm.from_latlon(lla[0], lla[1])
+                px, py = retrieve_pixel_coords([ux, uy], list(geotransform))
+            else:
+                px, py = retrieve_pixel_coords([lla[1], lla[0]], list(geotransform))
+
+            off_x = int(np.round(px - half_patch))
+            off_y = int(np.round(py - half_patch))
+
+            bathy_patch = extract_raster_patch(raster_ds, off_x, off_y, patch_size[0])
+
+            patch_fname = os.path.splitext(image['file_name'])[0] + ".npy"
+            patch_path = os.path.join(patch_output_dir, patch_fname)
+
+            np.save(patch_path, bathy_patch)
+            raster_entry = {
+                "file_name": patch_fname,
+                "path": patch_path,
+                "height": patch_size[0],
+                "width": patch_size[0]
+            }
+
+            image[raster_name] = raster_entry
+
+        updated_image_list.append(image)
+
+    return updated_image_list
+
+
+def extract_cluster_labels(cluster_filepath):
+    """
+    Extracts the cluster labels from the cluster filepath.
+
+    Args:
+        cluster_filepath:
+
+    Returns:
+
+    """
+    cluster_lookup = {} # key=image_fp, value=cluster label
+    with open(cluster_filepath, 'r') as data_file:
+        try:  # Try with a tab delimiter.
+            data_reader = csv.reader(data_file, delimiter='\t')
+            for row in data_reader:
+                if row:
+                    if row[0][0] == '%':
+                        continue
+                    # Remove the color/mono part and extension
+                    fp = '_'.join(row[2].split('_')[:-1])
+                    cluster_lookup[fp] = row[4]
+        except IndexError:  # If out of range, try with a space delimiter
+            data_reader = csv.reader(data_file, delimiter=' ')
+            for row in data_reader:
+                if row:
+                    if row[0][0] == '%':
+                        continue
+                    # Remove the color/mono part and extension
+                    print(row)
+                    fp = '_'.join(row[2].split('_')[:-1])
+                    print(fp)
+                    cluster_lookup[fp] = row[4]
+    return cluster_lookup
+
+
+def add_clusters_to_dataset(dataset, cluster_filepath):
+    """
+    Adds image list to the
+    Args:
+        dataset:
+        cluster_filepath:
+
+    Returns:
+
+    """
+    cluster_lookup = extract_cluster_labels(cluster_filepath)
+
+    uniq_cats = sorted(list(set(cluster_lookup.values())))
+    categories = []
+    for i,cl in enumerate(uniq_cats):
+        cat = {
+            'id': int(cl),  # Needs to be indexed from 1
+            'name': str(cl),
+            'supercategory': ""
+        }
+        categories.append(cat)
+
+    annotations = []
+    ann_count = 1  # Index from 1
+    for image in dataset['images']:
+        reduced_fn = '_'.join(image['file_name'].split('_')[:-1])
+        if reduced_fn in cluster_lookup:
+            catID = cluster_lookup[reduced_fn]  # Label
+            ann = {
+                'id': ann_count,
+                'category_id': int(catID),
+                'image_id': image['id'],
+                "annotation_type": "point",  # Put it as a point label so it will show up in label software
+                'bbox': [1, 2, 3, 4], # Needs to be there
+                "iscrowd": 0,
+                "occluded": False,
+                "segmentation": [[1, 2, 3, 4]],
+                'area': 10.0
+            }
+            ann_count += 1
+            annotations.append(ann)
+    dataset['annotations'] = annotations
+    dataset['categories'] = categories
+    return dataset
+
+
+
+def main(args):
+    # Check the dive path exists
+    if not os.path.isdir(args.dive_path):
+        raise ValueError("dive_path does not exist")
+
+    # Get the images subdirectory
+    image_subdir = get_images_subdirectory(args.dive_path)
+
+    # Parse the image size. Usually just leave this blank and it will get the image size from the image file
+    if args.img_size:
+        image_size = [int(x) for x in args.img_size.split('x')]
+    else:
+        image_size = [None, None]
+
+    # Get the image list
+    image_list = get_image_list(args.dive_path, image_subdir, args.colour_mono, width=image_size[0], height=image_size[1])
+
+    # Get the renav directory
+    if not args.renav_subdir:
+        renav_subdir = get_renav_subdirectory(args.dive_path)
+        if renav_subdir is None:
+            logging.warning("Renav subdirectory not found")
+    else:
+        if not os.path.exists(os.path.join(args.dive_path, args.renav_subdir)):
+            logging.warning("Given renav-subdir not found")
+        renav_subdir = args.renav_subdir
+
+    # Adds the per-image mesh to each image. This is deprecated. Don't use.
+    if args.mesh:
+        image_list = add_mesh_to_images(image_list, args.dive_path, renav_subdir, remove_images_without_mesh=False)
+
+    # If a pose file is given, add it to the images. This adds the pose and geolocation of each image to each image entry
+    if args.renav_pose_file:
+        # Parse the renav pose file. Gets the image poses and the datum
+        stereo_pose_list, datum = extract_stereo_poses(args.renav_pose_file)
+        # Adds the poses to the image list
+        image_list = add_pose_to_images(image_list, stereo_pose_list, args.colour_mono)
+    else:
+        datum = None
+
+
+    raster_collection = {}
+
+    # If raster is given:
+    if args.raster:
+        # Get the raster names and corresponding tiffs from the arguments
+        rasters = [r for r in args.raster.split(',')]
+        tiffs = [t for t in args.raster_tiffs.split(',')]
+
+        # Check the length of the rasters is equal to the tiffs
+        if len(rasters) != len(tiffs):
+            raise ValueError("Rasters must correspond to raster_tiffs, e.g. --raster bathy,backscatter --raster-tiffs /path/to/bathy.tiff,/path/to/backscatter.tiff")
+
+        # Check the tiffs exist
+        for tp in tiffs:
+            if not os.path.exists(tp):
+                raise ValueError("Tiff File %s does not exist" %tp)
+
+        # Parse the patch sizes
+        patch_sizes = []
+        if args.extract_raster_patches:
+            for ps in args.raster_patch_size.split(','):
+                sz = [int(x) for x in ps.split('x')]
+                patch_sizes.append(sz)
+            if len(patch_sizes) != len(rasters):
+                raise ValueError(
+                    "Rasters must correspond to patch sizes, e.g. --raster bathy,backscatter --raster-patch-size 21x21,21x21")
+
+        # Go through each raster, and add it the raster collection, then extract the patches if specified
+        for n, (raster,tff) in enumerate(zip(rasters, tiffs)):
+            raster_collection[raster] = {
+                "path": tff
+            }
+
+            if args.extract_raster_patches:
+                raster_ds, geotransform, raster_info = extract_geotransform(tff)
+                patch_size = patch_sizes[n]
+                image_list = extract_raster_patches_for_images(image_list, raster, raster_ds, geotransform, raster_info, patch_size, args.raster_projection_params, os.path.join(args.raster_patch_dir, raster))
+
+    # Create the information dictionary
+    info = create_info(os.path.basename(args.dive_path),
+                       trip=args.trip,
+                       year=args.year,
+                       datum=datum)
+    # Create the dataset
+    dataset = {
+        'images': image_list,
+        'info': info,
+        'annotations': [],
+        'categories': [],
+        'licenses': []
+    }
+
+    # Add the rasters to the dataset
+    if len(raster_collection) != 0:
+        for k,v in raster_collection.items():
+            dataset[k] = v
+
+    # If a cluster file is specified, add it to the dataset
+    if args.cluster_file:
+        dataset = add_clusters_to_dataset(dataset, args.cluster_file)
+
+    # Save the dataset
+    json.dump(dataset, open(args.output_coco, 'w'), indent=4, sort_keys=True)
+
+if __name__ == "__main__":
+    main(get_args())

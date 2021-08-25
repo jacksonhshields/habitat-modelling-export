@@ -1,0 +1,35 @@
+{
+  "model": {
+    "type": "bathymetry_autoencoder",
+    "filters": [512,512],
+    "neurons": [512,512],
+    "block_type": "plain",
+    "latent_dim": 32,
+    "input_shape": [21,21,1],
+    "warm_encoder_weights": null,
+    "warm_generator_weights": null
+  },
+  "rasters": {
+    "bathymetry": {
+      "path": "/path/to/bathymetry.tif",
+      "size": [21,21],
+      "boundary": null,
+      "transform": "tensor"
+    }
+  },
+  "training": {
+    "optimizer": "adam",
+    "lr": 1e-4,
+    "epochs": 100,
+    "samples_per_epoch": 1000,
+    "batch_norm": false,
+    "save_model_freq": 1,
+    "focus_training": false,
+    "focus_percentile": 10,
+    "schedule": {
+      "type": "step",
+      "gamma": 0.2,
+      "step_size": 10
+    }
+  }
+}

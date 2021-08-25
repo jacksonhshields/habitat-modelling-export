@@ -1,0 +1,42 @@
+model:
+  type: "bayesnn3"
+  params:
+    input_dim: 33
+    layer_neurons: [1024,1024,1024]
+    num_classes: 5
+  warm_weights: null
+  warm_pyro_params: null
+rasters:
+  bathymetry5:
+    path: "/path/to/bathymetry.tif"
+    size: [5,5]
+  bathymetry11:
+    path: "/path/to/bathymetry.tif"
+    size: [11,11]
+  backscatter:
+    path: "/path/to/backscatter.tif"
+    size: [21,21]
+extractors:
+  - type: "bathymetry_encoder"
+    inputs: ["bathymetry"]
+    params: "/path/to/encoder_params.json"
+    weights: "/path/to/encoder_weights.pt"
+  - type: "bathymetry_encoder"
+    inputs: ["backscatter"]
+    params: "/path/to/encoder_params.json"
+    weights: "/path/to/encoder_weights.pt"
+datasets:
+  train:
+    path: "/path/to/train_coco.json"
+  val:
+    path: "/path/to/val_coco.json"
+training:
+  num_classes: 5
+  optimizer:
+    type: "adam"
+    lr: 1e-4
+  epochs: 100
+  batch_size: 8
+  val_steps: 200
+  inference_samples: 16
+

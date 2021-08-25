@@ -1,0 +1,37 @@
+model:
+  type: "gp_grid"
+  params:
+    num_dim: 33  # input dimensions
+    grid_bounds: [-10, 10]
+    grid_size: 64
+  likeihood_params:
+    num_features: 33   # Must equal model/params/num_dim
+    num_classes: 5
+  warm_weights: null
+rasters:
+  bathymetry:
+    path: "/path/to/bathymetry.tif"
+    size: [5,5]
+extractors:
+  - type: "bathymetry_encoder"
+    inputs: ["bathymetry"]
+    params: "/path/to/encoder_params.json"
+    weights: "/path/to/encoder_weights.pt"
+datasets:
+  train:
+    path: "/path/to/train_coco.json"
+  val:
+    path: "/path/to/val_coco.json"
+training:
+  num_classes: 5
+  optimizer:
+    type: "adam"
+    lr: 1e-4
+  epochs: 100
+  batch_size: 8
+  val_steps: 200
+  schedule:
+    type: "multi"
+validation:
+  inference_samples: 16
+

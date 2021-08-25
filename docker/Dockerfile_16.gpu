@@ -1,0 +1,109 @@
+
+ARG cuda_version=10.0
+ARG cudnn_version=7
+FROM nvidia/cuda:${cuda_version}-cudnn${cudnn_version}-devel-ubuntu16.04
+ARG tf_version=2.0.0-rc1
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install system packages
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      bzip2 \
+      g++ \
+      git \
+      graphviz \
+      libgl1-mesa-glx \
+      libhdf5-dev \
+      openmpi-bin \
+      vim \
+      nano \
+      python3-dev \
+      python3-pip \
+      python3-tk \
+      python3-setuptools \
+      python3-wheel \
+      openssh-client \
+      openssh-server \
+      jq \
+      pkg-config \
+      cmake \
+      libboost-python-dev \
+      libboost-all-dev \
+      libeigen3-dev \
+      wget && \
+    rm -rf /var/lib/apt/lists/*
+
+
+RUN apt-get update && apt install -y --no-install-recommends \
+    gdal-bin \
+    python-gdal \
+    python3-gdal
+
+RUN pip3 install --upgrade pip
+
+RUN pip3 install \
+      wheel \
+      numpy \
+      sklearn_pandas \
+      tensorflow-gpu==${tf_version} \
+      keras \
+      h5py \
+      matplotlib \
+      mkl \
+      nose \
+      notebook \
+      Pillow \
+      pandas \
+      pyyaml \
+      scikit-learn \
+      cython \
+      seaborn \
+      bidict \
+      cython \
+      imgaug \
+      ipython \
+      jupyter \
+      opencv-python \
+      scikit-image \
+      scikit-learn \
+      scipy \
+      six \
+      shapely \
+      colorama \
+      pymap3d \
+      utm \
+      plyfile \
+      pyproj \
+      affine
+
+RUN pip3 install \
+    pycocotools
+
+
+#RUN if [ "$cuda_version" = 10 ]; then pip3 install https://download.pytorch.org/whl/cu100/torch-1.1.0-cp36-cp36m-linux_x86_64.whl https://download.pytorch.org/whl/cu100/torchvision-0.3.0-cp36-cp36m-linux_x86_64.whl ; else pip3 install torch torchvision ; fi
+#RUN if [ "$cuda_version" = 9.2 ]; then pip3 install torch==1.2.0+cu92 torchvision==0.4.0+cu92 -f https://download.pytorch.org/whl/torch_stable.html ; else pip3 install torch torchvision ; fi
+
+RUN pip3 install torch torchvision
+
+RUN pip3 install pyro-ppl
+
+RUN pip3 install neptune-client \
+	psutil
+
+RUN pip3 install umap-learn
+
+RUN pip3 install pymap3d --upgrade
+
+RUN pip3 install --upgrade numpy
+
+# Install libcluster
+RUN git clone https://github.com/dsteinberg/libcluster.git && \
+    cd libcluster && \
+    mkdir build && cd build &&  \
+    cmake -DBUILD_USE_PYTHON3=ON -DBUILD_PYTHON_INTERFACE=ON .. && \
+    make && make install
+
+COPY . /habitat-modelling
+
+RUN mkdir /scratch /project ~/src/
+
+RUN ln -s /habitat-modelling ~/src/habitat-modelling

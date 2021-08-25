@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+
+import matplotlib.pyplot as plt
+import numpy as np
+import argparse
+import pandas as pd
+import logging
+
+# A simple plotting utility, useful for plotting training csvs
+# Usage: plot-csv vae_pool_bn.csv --x-axis Epoch --y-axis "Reconstruction Loss"
+
+def get_args():
+    parser = argparse.ArgumentParser(description="Plots data from a CSV file")
+    parser.add_argument('csv_path', help="Path to the coco format training dataset")
+    parser.add_argument('--x-axis', help="The column to plot on the x-axis")
+    parser.add_argument('--y-axis', help="The column(s) to plot on the y-axis. Comma separated if multiple, e.g. g_loss,d_loss")
+    parser.add_argument('--title', help="The title of the plot")
+    parser.add_argument('--save-plot', help="Path to save the plot to")
+    args = parser.parse_args()
+    return args
+
+
+def main(args):
+    df = pd.read_csv(args.csv_path)
+    plt.figure()
+    if not args.x_axis:
+        options = {n:col for n, col in enumerate(df.columns.values)}
+        options[len(options.keys())] = "range"
+        opt = None
+        while opt is None:
+            sel = input("Select x axis: " + str(options) + " : ")
+            opt = options.get(int(sel), None)
+        if opt == "range":
+            x_vals = range(df.shape[0])
+            x_label = "x"
+        else:
+            x_vals = df[opt]
+            x_label = opt
+    else:
+        x_vals = df[args.x_axis]
+        x_label = args.x_axis
+    if not args.y_axis:
+        options = {n:col for n, col in enumerate(df.columns.values)}
+        opt = None
+        while opt is None:
+            sel = input("Select y axis: " + str(options) + " : ")
+            opt = options.get(int(sel), None)
+        y_vals = df[opt]
+        y_label = opt
+    else:
+        y_vals = df[args.y_axis]
+        y_label = args.y_axis
+
+    plt.plot(x_vals, y_vals)
+    # plt.legend()
+    plt.xlabel(x_label)
+    plt.ylabel(y_label)
+    if args.title:
+        plt.title(args.title)
+    if args.save_plot:
+        plt.savefig(args.save_plot)
+    plt.show()
+
+
+
+if __name__ == "__main__":
+    main(get_args())

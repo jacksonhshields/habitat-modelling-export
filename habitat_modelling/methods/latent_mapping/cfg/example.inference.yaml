@@ -1,0 +1,28 @@
+inference:
+  sample_rate: 1.0
+  x_range: null
+  y_range: null
+  preprocess_scaler: null
+  monte_carlo_samples: 32
+rasters:
+  bathymetry:
+    path: "/path/to/bathymetry.tif"
+    size: [21,21]
+  backscatter:
+    path: "/path/to/backscatter.tif"
+    size: [21,21]
+extractors:
+  - type: "bathymetry_autoencoder"
+    inputs: ["bathymetry"]
+    params: "/path/to/encoder_params.json"
+    weights: "/path/to/weights.pt"
+  - type: "bathymetry_autoencoder"
+    inputs: ["backscatter"]
+    params: "/path/to/encoder_params.json"
+    weights: "/path/to/weights.pt"
+model:
+  type: "drop"
+  params: "/path/to/model_params.json"
+  weights: "/path/to/model_weights.pt"
+  pyro_params: "/path/to/pyro_params.pt"
+

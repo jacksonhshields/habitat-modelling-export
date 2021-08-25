@@ -1,0 +1,30 @@
+inference:
+  sample_rate: 0.25
+  x_range: [579286.71,581145.59]
+  y_range: [5229334.27,5230183.75]
+  preprocess_scaler: null
+  load_pickle: null
+  just_inference: false
+rasters:
+  bathymetry:
+    path: "/path/to/bathymetry.tif"
+    size: [21,21]
+  backscatter:
+    path: "/path/to/backscatter.tif"
+    size: [21,21]
+extractors:
+  - type: "bathymetry_encoder"
+    inputs: ["bathymetry"]
+    params: "/path/to/encoder_params.json"
+    weights: "/path/to/weights.pt"
+  - type: "bathymetry_encoder"
+    inputs: ["backscatter"]
+    params: "/path/to/encoder_params.json"
+    weights: "/path/to/weights.pt"
+clustering:
+  type: "gmm"
+  params:
+    n_components: 10
+  calc_probs: true
+  output_features: false
+  ignore_depth: false

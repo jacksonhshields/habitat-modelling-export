@@ -1,0 +1,17 @@
+inference:
+  sample_rate: 0.2
+  x_range: null
+  y_range: null
+  preprocess_scaler: null
+  load_pickle: null
+  save_pickle: "inference.pkl"
+  just_inference: false
+rasters:
+  bathymetry:
+    path: "/path/to/bathymetry.tif"
+    size: [11,11]
+extractors:
+  - type: "bathymetry_vae"
+    inputs: ["bathymetry"]
+    params: "/path/to/models/encoder_params.json"
+    weights: "/path/to/models/encoder_XX.pt"

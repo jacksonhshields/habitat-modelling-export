@@ -1,0 +1,40 @@
+rasters:  # Raster configuration - sets up the rasters
+  bathymetry:
+    path: "/path/to/bathymetry.tif"
+    size: [21,21]
+extractors:  # Feature extractor config
+  - type: "bathymetry_encoder"
+    inputs: ["bathymetry"]
+    params: "/path/to/encoder_params.json"
+    weights: "/path/to/encoder_weights.pt"
+datasets:  # Setup the datasets
+  train:  #
+    path: "/path/to/train_coco.json"
+  seed:  # This is a subset of train, that is used to train in iteration 0.
+    path: "/path/to/seed_coco.json"
+  val:
+    path: "/path/to/val_coco.json"
+training:
+  num_classes: 5
+  optimizer:
+    type: "adam"
+    lr: 1e-4
+  epochs: 100
+  batch_size: 8
+  val_steps: 200
+  inference_samples: 16
+model:
+  type: "bayesnn3"
+  params:
+    input_dim: 33
+    layer_neurons: [1024,1024,1024]
+    num_classes: 5
+  warm_weights: null
+  warm_pyro_params: null
+selective:
+  model_type: "bayesnn"
+  samples_per_iteration: 250  # The number of samples to move from pool to train.
+  method: "bald"
+  max_iteration: null
+  ball_params: {}
+

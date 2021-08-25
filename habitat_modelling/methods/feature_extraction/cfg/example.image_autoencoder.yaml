@@ -1,0 +1,29 @@
+model:  # Parameters to define the model
+  type: "image_autoencoder"  # The type of model
+  filters: [[512, 512],[512,512]]  # Filters in each convolutional layer
+  block_type: "plain"  # the type of blocks
+  latent_dim: 512  # Number of latent dimensions
+  input_shape: [256,256,3]  # Input shape
+  warm_encoder_weights: null  # Optional path to the encoder weights
+  warm_generator_weights: null  # Optional path the generator weigts
+datasets:
+  train: "/path/to/train.json"
+  val: "/path/to/val.json"
+training:  # the parameters for training
+  optimizer: "adam"  # The optimizer
+  lr: 0.0001
+  epochs: 100
+  batch_size: 8
+  samples_per_epoch: 1000  # How many times to sample the raster each epoch
+  save_model_freq: 1  # How often to save the model
+  focus_training: false  # Whether to use focus training ( hard negative mining )
+  focus_percentile: 10.0  # The top x percent of samples to use when focus ( hard negative mining ) training
+  schedule:  # The learning rate schedule is
+    type: "step"  # The schedule steps
+    gamma: 0.5  # The rate at which to decrease the learning rate
+    step_size: 10  # How much to decrease the step size by
+  transforms:
+    resize:
+      size: [256,256,3]  # Should match model/input_shape
+    imgaug: ["jitter", "vflip", "hflip"]
+    tensor: {}
